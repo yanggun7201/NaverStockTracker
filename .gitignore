@@ -1,0 +1,16 @@
+# Dependencies
+# npm 이나 yarn 으로 설치된 라이브러리 폴더입니다. 용량이 크고, package.json 으로 재설치 가능하므로 제외합니다.
+/node_modules
+
+# Environment variables
+# 슬랙 토큰, 채널 ID 등 민감한 정보가 포함된 파일이므로 저장소에 올리면 안 됩니다.
+.env*
+!.env.example
+
+# Generated files
+# 디버깅 목적으로 생성되는 HTML 파일이므로 제외합니다.
+output.html
+
+# OS generated files
+# macOS 나 Windows 등 운영체제에서 자동으로 생성하는 파일들을 제외합니다.
+.DS_Store
