@@ -6,6 +6,7 @@ const { wrapper } = require('axios-cookiejar-support');
 require('dotenv').config(); // .env 파일의 환경 변수를 로드합니다.
 const { WebClient } = require('@slack/web-api');
 const { CookieJar } = require('tough-cookie');
+const cron = require('node-cron');
 
 // 쿠키를 저장하고 관리하기 위한 CookieJar 인스턴스 생성
 const jar = new CookieJar();
@@ -173,14 +174,6 @@ const runTracker = async () => {
   const currentHour = kstNow.getUTCHours();
   const currentMinute = kstNow.getUTCMinutes();
 
-  // 1. 허용된 요일인지 확인
-  const allowedDaysStr = process.env.ALLOWED_DAYS || '1,2,3,4,5'; // 기본값: 월~금
-  const allowedDays = allowedDaysStr.split(',').map(day => parseInt(day, 10));
-  if (!allowedDays.includes(dayOfWeek)) {
-    console.log(`[${new Date().toLocaleString()}] 허용된 요일이 아니므로 데이터 수집을 건너뜁니다.`);
-    return;
-  }
-
   // 2. 장 시간(09:00 ~ 15:30)인지 확인
   const currentTime = currentHour * 60 + currentMinute;
   const startTime = startHour * 60 + startMinute;
@@ -207,12 +200,16 @@ const runTracker = async () => {
   console.log(`[${new Date().toLocaleString()}] 모든 시장의 데이터 수집이 완료되었습니다.`);
 };
 
-// 1. 스크립트 시작 시 즉시 한 번 실행합니다.
-runTracker();
+// .env 파일에서 Cron 스케줄을 가져옵니다. 기본값은 10분마다 입니다.
+const schedule = process.env.RUN_CRON_SCHEDULE || '*/10 * * * *';
 
-// 2. 그 후 10분(600,000 밀리초)마다 주기적으로 실행합니다.
-const tenMinutesInMs = 10 * 60 * 1000;
-setInterval(runTracker, tenMinutesInMs);
+// Cron 스케줄이 유효한지 확인합니다.
+if (cron.validate(schedule)) {
+  console.log(`\n프로그램이 시작되었습니다. 스케줄(${schedule})에 따라 자동 실행됩니다.`);
+  console.log('프로그램을 종료하려면 Ctrl + C 를 누르세요.');
 
-console.log('\n프로그램이 시작되었습니다. 10분 간격으로 자동 실행됩니다.');
-console.log('프로그램을 종료하려면 Ctrl + C 를 누르세요.');
+  // 설정된 스케줄에 따라 runTracker 함수를 실행합니다.
+  cron.schedule(schedule, runTracker);
+} else {
+  console.error('오류: .env 파일의 RUN_CRON_SCHEDULE이 유효한 Cron 표현식이 아닙니다.');
+}
