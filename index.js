@@ -64,7 +64,8 @@ async function sendToSlack(stocks, marketName) {
       await slackClient.chat.postMessage({
         channel: channelId,
         text: messageText, // 푸시 알림 등에 사용될 fallback 텍스트
-        blocks: messageBlocks
+        blocks: messageBlocks,
+        unfurl_links: false // 링크 미리보기(썸네일) 비활성화
       });
     } catch (error) {
       console.error(`슬랙 메시지 전송 중 오류 발생 (Part ${Math.floor(i / chunkSize) + 1}):`, error);
