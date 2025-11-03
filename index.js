@@ -13,6 +13,12 @@ const jar = new CookieJar();
 // axios가 쿠키를 사용할 수 있도록 wrapper로 감싸줍니다.
 const client = wrapper(axios.create({ jar }));
 
+// 오늘 알림을 보낸 종목을 기록하기 위한 상태 변수
+const notificationState = {
+  date: null, // 알림을 보낸 날짜 (YYYY-MM-DD 형식)
+  sentStocks: new Set(), // 오늘 알림을 보낸 종목 목록 (Set으로 중복 방지)
+};
+
 async function sendToSlack(stocks, marketName) {
   const token = process.env.SLACK_TOKEN;
   const channelId = process.env.SLACK_CHANNEL_ID;
@@ -23,37 +29,51 @@ async function sendToSlack(stocks, marketName) {
   }
 
   if (stocks.length === 0) {
-    console.log('슬랙으로 보낼 종목이 없습니다.');
+    console.log(`[${marketName}] 슬랙으로 보낼 새로운 종목이 없습니다.`);
     return;
   }
 
   const slackClient = new WebClient(token);
 
-  // 슬랙 메시지 포맷 생성
-  const stockMessages = stocks.map(stock => (
-    `*<${stock.url}|${stock.name}>* \n` +
-    `> 가격: ${stock.price.toLocaleString()}원, 등락률: ${stock.changeRate}%, 거래량: ${stock.todayVolume.toLocaleString()} (전일: ${stock.yesterdayVolume.toLocaleString()})`
-  )).join('\n\n');
+  // 메시지 글자 수 제한(3000자)을 넘지 않도록, 종목을 20개씩 나누어 보냅니다.
+  const chunkSize = 20;
+  for (let i = 0; i < stocks.length; i += chunkSize) {
+    const chunk = stocks.slice(i, i + chunkSize);
 
-  const messageText = `📈 ${marketName} 조건 만족 주식 알림 (${stocks.length}건)`;
-  const messageBlocks = [
-    {
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `*${messageText}*\n\n${stockMessages}`,
+    // 슬랙 메시지 포맷 생성
+    const stockMessages = chunk.map(stock => (
+      `*<${stock.url}|${stock.name}>* \n` +
+      `> 가격: ${stock.price.toLocaleString()}원, 등락률: ${stock.changeRate}%, 거래량: ${stock.todayVolume.toLocaleString()} (전일: ${stock.yesterdayVolume.toLocaleString()})`
+    )).join('\n\n');
+
+    // 여러 메시지로 나뉘어 보내는 경우, 몇 번째 메시지인지 표시
+    const part = stocks.length > chunkSize ? ` (Part ${Math.floor(i / chunkSize) + 1})` : '';
+    const messageText = `📈 ${marketName} 조건 만족 주식 알림${part}`;
+    
+    const messageBlocks = [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*${messageText}*\n\n${stockMessages}`,
+        }
       }
-    }
-  ];
+    ];
 
-  await slackClient.chat.postMessage({
-    channel: channelId,
-    text: messageText, // 푸시 알림 등에 사용될 fallback 텍스트
-    blocks: messageBlocks
-  });
+    try {
+      await slackClient.chat.postMessage({
+        channel: channelId,
+        text: messageText, // 푸시 알림 등에 사용될 fallback 텍스트
+        blocks: messageBlocks
+      });
+    } catch (error) {
+      console.error(`슬랙 메시지 전송 중 오류 발생 (Part ${Math.floor(i / chunkSize) + 1}):`, error);
+      // 에러가 발생해도 다음 청크 전송을 위해 계속 진행
+    }
+  }
 }
 
-async function getStockData(market) {
+async function getStockData(market, sentStocksSet) {
   const fallUrl = `https://finance.naver.com/sise/sise_fall.naver?sosok=${market.sosok}`;
   const fieldSubmitUrl = `https://finance.naver.com/sise/field_submit.naver?menu=down&returnUrl=http%3A%2F%2Ffinance.naver.com%2Fsise%2Fsise_fall.naver%3Fsosok%3D${market.sosok}&fieldIds=quant&fieldIds=prev_quant`;
 
@@ -143,13 +163,23 @@ async function getStockData(market) {
       return stock.changeRate <= changeRateThreshold && stock.todayVolume >= stock.yesterdayVolume * volumeMultiplier;
     });
 
-    console.log(`[${market.name}] 조건 만족 종목: ${filteredStocks.length}건`);
-    console.log(filteredStocks);
+    console.log(`[${market.name}] 조건 만족 종목 ${filteredStocks.length}건 발견`);
+
+    // 3. 오늘 이미 알림을 보낸 종목은 제외하고, 새로운 종목만 필터링합니다.
+    const newStocksToSend = filteredStocks.filter(stock => {
+      const stockId = `${market.name}-${stock.name}`;
+      return !sentStocksSet.has(stockId);
+    });
 
     // 슬랙으로 결과 전송
-    await sendToSlack(filteredStocks, market.name);
-    if (filteredStocks.length > 0) {
+    await sendToSlack(newStocksToSend, market.name);
+    if (newStocksToSend.length > 0) {
       console.log(`[${market.name}] 슬랙으로 메시지를 성공적으로 전송했습니다.`);
+      // 알림을 보낸 종목들을 기록합니다.
+      newStocksToSend.forEach(stock => {
+        const stockId = `${market.name}-${stock.name}`;
+        sentStocksSet.add(stockId);
+      });
     }
 
   } catch (error) {
@@ -173,6 +203,15 @@ const runTracker = async () => {
   const dayOfWeek = kstNow.getUTCDay(); // 0:일요일, 1:월요일, ..., 6:토요일
   const currentHour = kstNow.getUTCHours();
   const currentMinute = kstNow.getUTCMinutes();
+  
+  // --- 한국 시간 기준 날짜 확인 및 알림 목록 초기화 ---
+  const kstDateString = kstNow.toISOString().split('T')[0]; // 'YYYY-MM-DD' 형식
+  if (notificationState.date !== kstDateString) {
+    console.log(`\n[${new Date().toLocaleString()}] 새로운 날짜(${kstDateString})입니다. 알림 목록을 초기화합니다.`);
+    notificationState.date = kstDateString;
+    notificationState.sentStocks.clear();
+  }
+  // --- 초기화 로직 끝 ---
 
   // 2. 장 시간(09:00 ~ 15:30)인지 확인
   const currentTime = currentHour * 60 + currentMinute;
@@ -194,7 +233,7 @@ const runTracker = async () => {
 
   // for...of 루프와 await를 사용하여 순차적으로 실행
   for (const market of markets) {
-    await getStockData(market);
+    await getStockData(market, notificationState.sentStocks);
   }
 
   console.log(`[${new Date().toLocaleString()}] 모든 시장의 데이터 수집이 완료되었습니다.`);
