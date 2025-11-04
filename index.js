@@ -40,22 +40,31 @@ async function sendToSlack(stocks, marketName) {
   for (let i = 0; i < stocks.length; i += chunkSize) {
     const chunk = stocks.slice(i, i + chunkSize);
 
+    // 한국 시간(KST) 기준으로 현재 날짜 및 시간 정보 가져오기
+    const now = new Date();
+    const kstNow = new Date(now.getTime() + (9 * 60 * 60 * 1000));
+    const kstDateString = kstNow.toISOString().replace('T', ' ').substring(0, 19);
+
     // 슬랙 메시지 포맷 생성
     const stockMessages = chunk.map(stock => (
       `*<${stock.url}|${stock.name}>* \n` +
       `> 가격: ${stock.price.toLocaleString()}원, 등락률: ${stock.changeRate}%, 거래량: ${stock.todayVolume.toLocaleString()} (전일: ${stock.yesterdayVolume.toLocaleString()})`
     )).join('\n\n');
 
+    // 메시지 제목 생성
     // 여러 메시지로 나뉘어 보내는 경우, 몇 번째 메시지인지 표시
     const part = stocks.length > chunkSize ? ` (Part ${Math.floor(i / chunkSize) + 1})` : '';
-    const messageText = `📈 ${marketName} 조건 만족 주식 알림${part}`;
+    const title = `📈 [${kstDateString}] ${marketName} 조건 만족 주식 알림${part}`;
+
+    // 푸시 알림용 텍스트 (블록이 지원되지 않는 경우)
+    const fallbackText = `[${kstDateString}] ${marketName} 조건 만족 주식 알림`;
     
     const messageBlocks = [
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*${messageText}*\n\n${stockMessages}`,
+          text: `*${title}*\n\n${stockMessages}`,
         }
       }
     ];
@@ -63,7 +72,7 @@ async function sendToSlack(stocks, marketName) {
     try {
       await slackClient.chat.postMessage({
         channel: channelId,
-        text: messageText, // 푸시 알림 등에 사용될 fallback 텍스트
+        text: fallbackText, // 푸시 알림 등에 사용될 fallback 텍스트
         blocks: messageBlocks,
         unfurl_links: false // 링크 미리보기(썸네일) 비활성화
       });
